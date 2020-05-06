@@ -27,7 +27,8 @@ from p2p.constants import (
     DISCOVERY_EVENTBUS_ENDPOINT,
 )
 from p2p.discovery import (
-    PreferredNodeDiscoveryService,
+    # PreferredNodeDiscoveryService,
+    DiscoveryService,
     StaticDiscoveryService,
 )
 from p2p.node_db import NodeDB
@@ -84,12 +85,22 @@ class PeerDiscoveryComponent(TrioIsolatedComponent):
             await socket.bind(("0.0.0.0", config.port))
             base_db = LevelDB(config.node_db_dir)
             node_db = NodeDB(default_identity_scheme_registry, base_db)
-            discovery_service = PreferredNodeDiscoveryService(
+            # discovery_service = PreferredNodeDiscoveryService(
+            #     config.nodekey,
+            #     config.port,
+            #     config.port,
+            #     config.bootstrap_nodes,
+            #     config.preferred_nodes,
+            #     event_bus,
+            #     socket,
+            #     node_db,
+            #     (eth_cap_provider,),
+            # )
+            discovery_service = DiscoveryService(
                 config.nodekey,
                 config.port,
                 config.port,
                 config.bootstrap_nodes,
-                config.preferred_nodes,
                 event_bus,
                 socket,
                 node_db,

@@ -284,6 +284,14 @@ class DiscoveryService(Service):
         self.manager.run_daemon_task(self.fetch_enrs)
         self.manager.run_daemon_task(self.consume_datagrams)
         self.manager.run_task(self.bootstrap)
+        self.manager.run_daemon_task(self.crawl)
+        # while True:
+        #     time.sleep(5)
+        #     self.manager.run_task(self.lookup_random)
+
+    async def crawl(self) -> None:
+        async for _ in trio_utils.every(10):
+            self.manager.run_task(self.lookup_random)
 
     async def fetch_enrs(self) -> None:
         async with self.pending_enrs_consumer:
@@ -319,7 +327,7 @@ class DiscoveryService(Service):
 
     async def report_stats(self) -> None:
         async for _ in trio_utils.every(self._stats_interval):
-            self.logger.debug("============================= Stats =======================")
+            self.logger.info("============================= Stats =======================")
             full_buckets = [
                 bucket
                 for bucket in self.routing.buckets
@@ -328,11 +336,13 @@ class DiscoveryService(Service):
             total_nodes = sum([len(bucket) for bucket in self.routing.buckets])
             nodes_in_replacement_cache = sum(
                 [len(replacement_cache) for replacement_cache in self.routing.replacement_caches])
-            self.logger.debug(
+            self.logger.info(
                 "Routing table has %s nodes in %s buckets (%s of which are full), and %s nodes "
                 "are in the replacement cache", total_nodes, len(self.routing.buckets),
                 len(full_buckets), nodes_in_replacement_cache)
-            self.logger.debug("===========================================================")
+            # for node in self.iter_nodes():
+            #     print(node)
+            self.logger.info("===========================================================")
 
     def update_routing_table(self, node: NodeAPI) -> None:
         """Update the routing table entry for the given node.
@@ -609,7 +619,7 @@ class DiscoveryService(Service):
             return tuple()
 
         while nodes_to_ask:
-            self.logger.debug2("node lookup; querying %s", nodes_to_ask)
+            self.logger.info("node lookup; querying %s", nodes_to_ask)
             nodes_asked.update(nodes_to_ask)
             next_find_node_queries = (
                 (_find_node, target_key, n)
