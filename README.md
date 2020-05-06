@@ -31,3 +31,11 @@ Check out the [documentation on our official website](https://trinity-client.rea
 
 Want to file a bug, contribute some code, or improve documentation? Excellent! Read up on our
 guidelines for [contributing](https://trinity-client.readthedocs.io/en/latest/contributing.html) and then check out one of our issues that are labeled [Good First Issue](https://github.com/ethereum/trinity/issues?q=is%3Aissue+is%3Aopen+label%3A%22Good+First+Issue%22).
+
+
+## Crawl
+
+python3 trinity/components/builtin/peer_discovery/component.py --trinity-root-dir "/Users/ken/Documents/Development/trinity_data"
+
+python3 trinity/db/manager.py --trinity-root-dir "/Users/ken/Documents/Development/trinity_data" -l 10
+
