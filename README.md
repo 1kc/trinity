@@ -35,7 +35,10 @@ guidelines for [contributing](https://trinity-client.readthedocs.io/en/latest/co
 
 ## Crawl
 
+Start manager:
+python3 trinity/db/manager.py --trinity-root-dir "/Users/ken/Documents/Development/trinity_data" -l 10
+
+Start peer discovery:
 python3 trinity/components/builtin/peer_discovery/component.py --trinity-root-dir "/Users/ken/Documents/Development/trinity_data"
 
-python3 trinity/db/manager.py --trinity-root-dir "/Users/ken/Documents/Development/trinity_data" -l 10
 

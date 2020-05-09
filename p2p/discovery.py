@@ -84,6 +84,7 @@ from p2p.kademlia import (
     Address, Node, check_relayed_addr, create_stub_enr, sort_by_distance, KademliaRoutingTable)
 from p2p._utils import get_logger
 from p2p import trio_utils
+import itertools
 
 # V4 handler are async methods that take a Node, payload and msg_hash as arguments.
 V4_HANDLER_TYPE = Callable[[NodeAPI, Tuple[Any, ...], Hash32], Awaitable[Any]]
@@ -278,18 +279,22 @@ class DiscoveryService(Service):
 
     def run_daemons_and_bootstrap(self) -> None:
         self.manager.run_daemon_task(self.handle_new_upnp_mapping)
-        self.manager.run_daemon_task(self.handle_get_peer_candidates_requests)
-        self.manager.run_daemon_task(self.handle_get_random_bootnode_requests)
+        # self.manager.run_daemon_task(self.handle_get_peer_candidates_requests)
+        # self.manager.run_daemon_task(self.handle_get_random_bootnode_requests)
         self.manager.run_daemon_task(self.report_stats)
         self.manager.run_daemon_task(self.fetch_enrs)
         self.manager.run_daemon_task(self.consume_datagrams)
         self.manager.run_task(self.bootstrap)
-        self.manager.run_daemon_task(self.crawl)
-        # while True:
-        #     time.sleep(5)
-        #     self.manager.run_task(self.lookup_random)
+        # self.manager.run_daemon_task(self.crawl_random)
+        self.manager.run_task(self.crawl_single)
 
-    async def crawl(self) -> None:
+    async def crawl_single(self) -> None:
+        self.logger.info("Sleeping")
+        await trio.sleep(30)
+        self.logger.info("Running crawl single")
+        res = await self.lookup_single()
+
+    async def crawl_random(self) -> None:
         async for _ in trio_utils.every(10):
             self.manager.run_task(self.lookup_random)
 
@@ -342,6 +347,8 @@ class DiscoveryService(Service):
                 len(full_buckets), nodes_in_replacement_cache)
             # for node in self.iter_nodes():
             #     print(node)
+
+            # node_ids = list(itertools.chain(*self.routing.buckets, *self.routing.replacement_caches))
             self.logger.info("===========================================================")
 
     def update_routing_table(self, node: NodeAPI) -> None:
@@ -354,15 +361,16 @@ class DiscoveryService(Service):
             self.logger.warning("Attempted to add node to RT when we haven't bonded before")
 
         eviction_candidate = self.routing.update(node.id)
-        if eviction_candidate:
-            # This means we couldn't add the node because its bucket is full, so schedule a bond()
-            # with the least recently seen node on that bucket. If the bonding fails the node will
-            # be removed from the bucket and a new one will be picked from the bucket's
-            # replacement cache.
-            self.logger.debug2(
-                "Routing table's bucket is full, couldn't add %s. "
-                "Checking if %s is still responding, will evict if not", node, eviction_candidate)
-            self.manager.run_task(self.bond, eviction_candidate)
+        # Do not evict
+        # if eviction_candidate:
+        #     # This means we couldn't add the node because its bucket is full, so schedule a bond()
+        #     # with the least recently seen node on that bucket. If the bonding fails the node will
+        #     # be removed from the bucket and a new one will be picked from the bucket's
+        #     # replacement cache.
+        #     self.logger.debug2(
+        #         "Routing table's bucket is full, couldn't add %s. "
+        #         "Checking if %s is still responding, will evict if not", node, eviction_candidate)
+        #     self.manager.run_task(self.bond, eviction_candidate)
 
         try:
             self.node_db.set_enr(node.enr)
@@ -609,6 +617,7 @@ class DiscoveryService(Service):
 
         def _exclude_if_asked(nodes: Iterable[NodeAPI]) -> List[NodeAPI]:
             nodes_to_ask = list(set(nodes).difference(nodes_asked))
+            # Ken: potentially increase find concurrency limit
             return sort_by_distance(nodes_to_ask, target_id)[:constants.KADEMLIA_FIND_CONCURRENCY]
 
         closest = list(self.get_neighbours(target_id))
@@ -619,7 +628,7 @@ class DiscoveryService(Service):
             return tuple()
 
         while nodes_to_ask:
-            self.logger.info("node lookup; querying %s", nodes_to_ask)
+            self.logger.debug2("node lookup; querying %s", nodes_to_ask)
             nodes_asked.update(nodes_to_ask)
             next_find_node_queries = (
                 (_find_node, target_key, n)
@@ -632,6 +641,7 @@ class DiscoveryService(Service):
                 closest.extend(candidates)
             # Need to sort again and pick just the closest k nodes to ensure we converge.
             closest = sort_by_distance(
+                # Ken: to optimize we could remove result slicing to bucket size?
                 eth_utils.toolz.unique(closest), target_id)[:constants.KADEMLIA_BUCKET_SIZE]
             nodes_to_ask = _exclude_if_asked(closest)
 
@@ -639,6 +649,13 @@ class DiscoveryService(Service):
             "lookup finished for target %s; closest neighbours: %s", to_hex(target_id), closest
         )
         return tuple(closest)
+
+    async def lookup_single(self) -> Tuple[NodeAPI, ...]:
+        # TODO: fix
+        target_key = int_to_big_endian(
+            secrets.randbits(constants.KADEMLIA_PUBLIC_KEY_SIZE)
+        ).rjust(constants.KADEMLIA_PUBLIC_KEY_SIZE // 8, b'\x00')
+        return await self.lookup(target_key)
 
     async def lookup_random(self) -> Tuple[NodeAPI, ...]:
         target_key = int_to_big_endian(
