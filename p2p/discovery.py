@@ -84,7 +84,7 @@ from p2p.kademlia import (
     Address, Node, check_relayed_addr, create_stub_enr, sort_by_distance, KademliaRoutingTable)
 from p2p._utils import get_logger
 from p2p import trio_utils
-import itertools
+from datetime import datetime
 
 # V4 handler are async methods that take a Node, payload and msg_hash as arguments.
 V4_HANDLER_TYPE = Callable[[NodeAPI, Tuple[Any, ...], Hash32], Awaitable[Any]]
@@ -278,21 +278,29 @@ class DiscoveryService(Service):
         await self.manager.wait_finished()
 
     def run_daemons_and_bootstrap(self) -> None:
-        self.manager.run_daemon_task(self.handle_new_upnp_mapping)
+        # self.manager.run_daemon_task(self.handle_new_upnp_mapping)
         # self.manager.run_daemon_task(self.handle_get_peer_candidates_requests)
         # self.manager.run_daemon_task(self.handle_get_random_bootnode_requests)
-        self.manager.run_daemon_task(self.report_stats)
+        # self.manager.run_daemon_task(self.report_stats)
         self.manager.run_daemon_task(self.fetch_enrs)
         self.manager.run_daemon_task(self.consume_datagrams)
-        self.manager.run_task(self.bootstrap)
+        # self.manager.run_task(self.bootstrap)
         # self.manager.run_daemon_task(self.crawl_random)
-        self.manager.run_task(self.crawl_single)
+        self.manager.run_task(self.crawl_bfs)
 
     async def crawl_single(self) -> None:
-        self.logger.info("Sleeping")
-        await trio.sleep(30)
+        # self.logger.info("Sleeping")
+        # await trio.sleep(10)
         self.logger.info("Running crawl single")
         res = await self.lookup_single()
+        print(res)
+
+    async def crawl_bfs(self) -> None:
+        self.logger.info("Running crawl bfs")
+        res = await self.lookup_bfs()
+        with open("crawled_ips.txt", "w+") as f:
+            for node in res:
+                f.write(node.address.ip + '\n')
 
     async def crawl_random(self) -> None:
         async for _ in trio_utils.every(10):
@@ -617,7 +625,6 @@ class DiscoveryService(Service):
 
         def _exclude_if_asked(nodes: Iterable[NodeAPI]) -> List[NodeAPI]:
             nodes_to_ask = list(set(nodes).difference(nodes_asked))
-            # Ken: potentially increase find concurrency limit
             return sort_by_distance(nodes_to_ask, target_id)[:constants.KADEMLIA_FIND_CONCURRENCY]
 
         closest = list(self.get_neighbours(target_id))
@@ -651,11 +658,80 @@ class DiscoveryService(Service):
         return tuple(closest)
 
     async def lookup_single(self) -> Tuple[NodeAPI, ...]:
-        # TODO: fix
-        target_key = int_to_big_endian(
-            secrets.randbits(constants.KADEMLIA_PUBLIC_KEY_SIZE)
-        ).rjust(constants.KADEMLIA_PUBLIC_KEY_SIZE // 8, b'\x00')
-        return await self.lookup(target_key)
+        bootstrap = Node.from_uri('enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303')
+        self.invalidate_bond(bootstrap.id)
+        bonded = await self.bond(bootstrap.id)
+        if not bonded:
+            self.logger.warning("Failed to bond with the bootstrap node")
+        else:
+            self.logger.info(
+                "Bonded with a single bootstrap node, starting crawl")
+
+        return await self.lookup(bootstrap.pubkey.to_bytes())
+
+    async def lookup_bfs(self) -> Set[NodeAPI]:
+        queue: List[NodeAPI] = []
+        nodes_seen: Set[NodeAPI] = set()
+        nodes_asked: Set[NodeAPI] = set()
+
+        async def _find_node(target: bytes, remote: NodeAPI) -> Tuple[NodeAPI, ...]:
+            self.send_find_node_v4(remote, target)
+            candidates = await self.wait_neighbours(remote)
+
+            if not candidates:
+                self.logger.debug("got no candidates from %s, returning", remote)
+                return tuple()
+            all_candidates = tuple(c for c in candidates if c not in nodes_seen)
+            candidates = tuple(
+                c for c in all_candidates
+                if (not self.ping_channels.already_waiting_for(c) and
+                    not self.pong_channels.already_waiting_for(c))
+            )
+            self.logger.debug2("got %s new candidates", len(candidates))
+            # Ensure all received candidates are in our DB so that we can bond with them.
+            # self._ensure_nodes_are_in_db(candidates)
+            # Add new candidates to nodes_seen so that we don't attempt to bond with failing ones
+            # in the future.
+            nodes_seen.update(candidates)
+            return candidates
+            # bonded = await trio_utils.gather(*((self.bond, c.id) for c in candidates))
+            # self.logger.debug2("bonded with %s candidates", bonded.count(True))
+            # return tuple(c for c in candidates if bonded[candidates.index(c)])
+
+        # Start from a single boostrap node
+        bootstrap = Node.from_uri('enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303')
+        self.invalidate_bond(bootstrap.id)
+        bonded = await self.bond(bootstrap.id)
+        if not bonded:
+            self.logger.warning("Failed to bond with the bootstrap node")
+        else:
+            self.logger.info(
+                "Bonded with a single bootstrap node, starting bfs crawl")
+        # Add boostrap to empty queue
+        queue.append(bootstrap)
+
+        prev_node_num = 0
+        while queue:
+            node_to_crawl = queue.pop()
+            nodes_asked.add(node_to_crawl)
+            # lookup 1000 random addresses
+            for _ in range(1000):
+                target = int_to_big_endian(secrets.randbits(constants.KADEMLIA_PUBLIC_KEY_SIZE))\
+                    .rjust(constants.KADEMLIA_PUBLIC_KEY_SIZE // 8, b'\x00')
+                results = await _find_node(target, node_to_crawl)
+                # Add nodes we have not seen to the queue
+                queue.extend(list(set(results).difference(nodes_asked)))
+                print(datetime.now(), " nodes: ", len(nodes_seen), " queue: ", len(queue))
+                if len(nodes_seen) > prev_node_num:
+                    # Move on if no new nodes are gained
+                    prev_node_num = len(nodes_seen)
+                else:
+                    break
+
+        print("finished crawling")
+        print(datetime.now())
+        return nodes_seen
+
 
     async def lookup_random(self) -> Tuple[NodeAPI, ...]:
         target_key = int_to_big_endian(
@@ -1423,3 +1499,4 @@ def get_external_ipaddress(logger: ExtendedDebugLogger) -> ipaddress.IPv4Address
                     return iface_addr
     logger.info("No internet-facing address found on any interface, using fallback one")
     return ipaddress.ip_address('127.0.0.1')
+

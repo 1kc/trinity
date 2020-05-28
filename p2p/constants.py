@@ -172,7 +172,8 @@ KADEMLIA_BITS_PER_HOP = 8
 KADEMLIA_BUCKET_SIZE = 16
 
 # round trip message timout
-KADEMLIA_REQUEST_TIMEOUT = 7.2
+# Decreased timeout to 0.5 seconds for fast processing of the crawl queue
+KADEMLIA_REQUEST_TIMEOUT = 0.5
 
 # Amount of time to consider a bucket idle
 KADEMLIA_IDLE_BUCKET_REFRESH_INTERVAL = 3600
